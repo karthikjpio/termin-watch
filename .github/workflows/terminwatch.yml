@@ -1,0 +1,12 @@
+name: termin-watch
+on:
+  schedule: [{ cron: "*/5 5-19 * * 1-5" }]  # UTC, weekdays; GitHub may delay runs
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install playwright && python -m playwright install --with-deps chromium
+      - run: python termin_watch.py
+        env: { NTFY_TOPIC: "${{ secrets.NTFY_TOPIC }}" }
