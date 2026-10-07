@@ -1,12 +1,17 @@
 name: termin-watch
 on:
-  schedule: [{ cron: "*/5 5-19 * * 1-5" }]  # UTC, weekdays; GitHub may delay runs
+  schedule:
+    - cron: "*/5 * * * *"            # regular check, every day, around the clock (UTC; GitHub may delay runs)
+    - cron: "40 4,5,6,21,22 * * *"   # burst: ~20 min before 00:00/07:00/08:00 Berlin, covers CEST and CET
   workflow_dispatch:
+    inputs:
+      burst: { type: boolean, default: false, description: "Run in burst mode" }
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - run: pip install playwright && python -m playwright install --with-deps chromium
-      - run: python termin_watch.py
+      - run: python termin_watch.py ${{ (github.event.schedule == '40 4,5,6,21,22 * * *' || inputs.burst) && '--burst' || '' }}
         env: { NTFY_TOPIC: "${{ secrets.NTFY_TOPIC }}" }

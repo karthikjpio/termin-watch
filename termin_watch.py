@@ -4,12 +4,22 @@ in Würselen and pushes an alert to iPhone (ntfy) + Mac when one appears.
 Setup: pip3 install playwright && python3 -m playwright install chromium
 Run:   NTFY_TOPIC=your-secret-topic python3 termin_watch.py
 """
-import asyncio, os, subprocess, sys, urllib.request
+import asyncio, os, subprocess, sys, time, urllib.request
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from playwright.async_api import async_playwright
 
 BASE = "https://termine.staedteregion-aachen.de"
 TOPIC = os.environ.get("NTFY_TOPIC")  # pick something unguessable, topics are public
 NONE_TEXT = "alle Termine vergeben"
+
+# --burst: the times new slots reportedly get released (German local time)
+BERLIN = ZoneInfo("Europe/Berlin")
+DROPS = [(0, 0), (7, 0), (8, 0)]
+DROP_DELAY = 20     # first check this many seconds after the drop
+WINDOW = 300        # keep checking this long after the first check
+INTERVAL = 30
+MAX_WAIT = 30 * 60  # cron fires ~20 min early; skip if no drop is this close
 
 
 def notify(title, msg, urgent=True):
@@ -50,19 +60,71 @@ async def check():
         return text
 
 
+def run_once():
+    """One check. Returns 'none', 'found' or 'unexpected'; raises if the site/browser fails."""
+    text = asyncio.run(check())
+    if NONE_TEXT in text:
+        print("no slots")
+        return "none"
+    if "Schritt 4" in text:
+        notify("TERMIN FREI!", "Führerscheinstelle Würselen hat Termine. Jetzt buchen!")
+        return "found"
+    notify("Termin watcher: unexpected page", text[:150], urgent=False)
+    return "unexpected"
+
+
+def next_drop(now):
+    """Start of the earliest drop window that hasn't ended yet."""
+    starts = []
+    for day in (0, 1):
+        d = now + timedelta(days=day)
+        for h, m in DROPS:
+            t = datetime(d.year, d.month, d.day, h, m, DROP_DELAY, tzinfo=BERLIN)
+            if t + timedelta(seconds=WINDOW) > now:
+                starts.append(t)
+    return min(starts)
+
+
+def burst():
+    """Wait for the next drop time, then poll every INTERVAL seconds for WINDOW seconds."""
+    now = datetime.now(BERLIN)
+    start = next_drop(now)
+    wait = (start - now).total_seconds()
+    if wait > MAX_WAIT:
+        print(f"next drop {start:%H:%M:%S} Berlin is {wait / 60:.0f} min away, skipping")
+        return
+    if wait > 0:
+        print(f"waiting {wait:.0f}s until {start:%H:%M:%S} Berlin", flush=True)
+        time.sleep(wait)
+    end = start + timedelta(seconds=WINDOW)
+    error = None
+    checked = False
+    while True:
+        print(f"{datetime.now(BERLIN):%H:%M:%S} Berlin: ", end="", flush=True)
+        try:
+            if run_once() != "none":
+                return
+            checked = True
+        except Exception as e:  # one flaky load shouldn't end the burst
+            error = e
+            print(f"check failed: {type(e).__name__}: {e}")
+        if datetime.now(BERLIN) + timedelta(seconds=INTERVAL) > end:
+            break
+        time.sleep(INTERVAL)
+    if not checked:
+        notify("Termin watcher broken", f"{type(error).__name__}: {str(error)[:120]}", urgent=False)
+        sys.exit(1)
+
+
 def main():
+    if "--burst" in sys.argv:
+        return burst()
     try:
-        text = asyncio.run(check())
+        run_once()
     except Exception as e:
         # ponytail: one low-priority ping per failure; add a failure counter if the site flakes a lot
         notify("Termin watcher broken", f"{type(e).__name__}: {str(e)[:120]}", urgent=False)
         sys.exit(1)
-    if NONE_TEXT in text:
-        print("no slots")
-    elif "Schritt 4" in text:
-        notify("TERMIN FREI!", "Führerscheinstelle Würselen hat Termine. Jetzt buchen!")
-    else:
-        notify("Termin watcher: unexpected page", text[:150], urgent=False)
 
 
 if __name__ == "__main__":
