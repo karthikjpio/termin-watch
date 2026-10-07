@@ -1,0 +1,13 @@
+name: keepalive
+# GitHub disables scheduled workflows in public repos after 60 days without activity;
+# re-enabling them weekly resets that timer.
+on:
+  schedule: [{ cron: "17 3 * * 1" }]
+  workflow_dispatch:
+permissions: { actions: write }
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - run: for wf in terminwatch.yml keepalive.yml; do gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$wf/enable" && echo "enabled $wf"; done
+        env: { GH_TOKEN: "${{ github.token }}" }
